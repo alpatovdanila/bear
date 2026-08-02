@@ -29,7 +29,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # не npm ci: в lock платформенные бинарники под win32, раннер — linux
+      - run: npm install --no-audit --no-fund
       - run: npm run build
       - uses: actions/configure-pages@v5
         with:
