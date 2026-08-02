@@ -27,7 +27,9 @@ await RAPIER.init();
 
 const renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// стартуем с 1: на ретине dpr=2 означает ×4 пикселей (и GTAO по ним же) —
+// на интеграшках это разница между 30 и 120 fps; ползунок «масштаб рендера»
+renderer.setPixelRatio(1);
 renderer.toneMapping = THREE.NeutralToneMapping; // дропдаун в панели «Картинка»
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
@@ -56,8 +58,10 @@ const aoDenoised = denoise(
   scenePass.getTextureNode('normal'),
   camera,
 );
-postProcessing.outputNode = scenePass.getTextureNode('output')
-  .mul(aoDenoised.r.pow(aoPow));
+// два выхода: с GTAO и без; при интенсивности 0 AO-пассы не исполняются вовсе
+const outputWithAO = scenePass.getTextureNode('output').mul(aoDenoised.r.pow(aoPow));
+const outputPlain = scenePass.getTextureNode('output');
+postProcessing.outputNode = outputWithAO;
 
 // Свет: IBL с небесной панорамы (сконвертирована из OpenImageIO .tx в .hdr)
 const envTex = await new RGBELoader().setDataType(THREE.FloatType).loadAsync('sky_linekotsi_07_HDRI.hdr');
@@ -118,6 +122,7 @@ sliderPanel('Картинка', 360, [
   ['shadow', 'интенсивность теней', 0, 1, 0.884],
   ['grassH', 'высота травы', 0.3, 2.5, 1.4454],
   ['fog', 'туманчик', 0, 1, 1],
+  ['pixels', 'масштаб рендера', 0.5, 2, 1],
 ], (key, v) => {
   if (key === 'pow') aoPow.value = v;
   else if (key === 'grassH') grassHeight.value = v;
@@ -132,6 +137,14 @@ sliderPanel('Картинка', 360, [
   else if (key === 'fog') { // 0 — без дымки, 1 — плотная
     scene.fog.near = 160 - v * 130;   // 160..30
     scene.fog.far = 900 - v * 560;    // 900..340
+  }
+  else if (key === 'pixels') renderer.setPixelRatio(v); // 1 = размер окна; ретина = 2
+  else if (key === 'scale') {
+    // на нуле выкидываем AO-пассы из графа целиком — они не считаются
+    postProcessing.outputNode = v <= 0.001 ? outputPlain : outputWithAO;
+    postProcessing.needsUpdate = true;
+    if (aoPass.scale?.value !== undefined) aoPass.scale.value = v;
+    else aoPass.scale = v;
   }
   else if (aoPass[key]?.value !== undefined) aoPass[key].value = v;
   else aoPass[key] = v;
@@ -433,6 +446,18 @@ const botMarks = [
   { x: 0, z: 0, color: BOT_COLORS[1] },
 ];
 
+// интерполяция физика(60 Гц)→визуал(любой Гц): пред/тек состояние тел
+const lerpBodies = [vehicle, bots[0].vehicle, bots[1].vehicle].map((v) => ({
+  body: v.chassis,
+  t0: new THREE.Vector3(), q0: new THREE.Quaternion(),
+  t1: new THREE.Vector3(), q1: new THREE.Quaternion(),
+}));
+for (const ls of lerpBodies) {
+  const lt = ls.body.translation(), lr = ls.body.rotation();
+  ls.t0.set(lt.x, lt.y, lt.z); ls.t1.copy(ls.t0);
+  ls.q0.set(lr.x, lr.y, lr.z, lr.w); ls.q1.copy(ls.q0);
+}
+
 // список машин для таранов деревьев (vel заполняется каждый кадр)
 const rammers = [
   { pos: car.position, vel: null },
@@ -560,18 +585,33 @@ renderer.setAnimationLoop(() => {
   accum += dt;
   let steps = 0;
   while (accum >= FIXED && steps < 4) {
+    // прошлое состояние тел — для интерполяции визуала между шагами
+    for (const ls of lerpBodies) {
+      const lt = ls.body.translation(), lr = ls.body.rotation();
+      ls.t0.set(lt.x, lt.y, lt.z);
+      ls.q0.set(lr.x, lr.y, lr.z, lr.w);
+    }
     vehicle.update(FIXED);
     for (const b of bots) b.vehicle.update(FIXED);
     world.step();
     accum -= FIXED;
     steps++;
   }
+  if (steps > 0) {
+    for (const ls of lerpBodies) {
+      const lt = ls.body.translation(), lr = ls.body.rotation();
+      ls.t1.set(lt.x, lt.y, lt.z);
+      ls.q1.set(lr.x, lr.y, lr.z, lr.w);
+    }
+  }
+  // физика — 60 Гц, экран может быть 120+ Гц (ProMotion): без интерполяции
+  // машины обновляются через кадр и картинку «трясёт»
+  const alpha = Math.min(accum / FIXED, 1);
 
-  // Синхронизация визуала
+  // Синхронизация визуала (интерполированная)
   const t = vehicle.chassis.translation();
-  const r = vehicle.chassis.rotation();
-  car.position.set(t.x, t.y, t.z);
-  car.quaternion.set(r.x, r.y, r.z, r.w);
+  car.position.lerpVectors(lerpBodies[0].t0, lerpBodies[0].t1, alpha);
+  car.quaternion.slerpQuaternions(lerpBodies[0].q0, lerpBodies[0].q1, alpha);
   vehicle.syncWheels(wheels);
   steerFace.rotation.z = -vehicle.steer * 2.8; // руль в кабине крутится
   car.updateMatrixWorld();
@@ -589,12 +629,13 @@ renderer.setAnimationLoop(() => {
   botMarks[1].x = bots[1].car.position.x; botMarks[1].z = bots[1].car.position.z;
   minimap.update(car.position, Math.atan2(-trailRight.x, trailRight.z), botMarks); // курс из поперечника
   wildlife.update(dt, car.position);
-  // синк ботов + их след в траве
-  for (const b of bots) {
-    const bt = b.vehicle.chassis.translation();
-    const br = b.vehicle.chassis.rotation();
-    b.car.position.set(bt.x, bt.y, bt.z);
-    b.car.quaternion.set(br.x, br.y, br.z, br.w);
+  // синк ботов (интерполированный) + их след в траве
+  for (let bi = 0; bi < bots.length; bi++) {
+    const b = bots[bi];
+    const bls = lerpBodies[bi + 1];
+    b.car.position.lerpVectors(bls.t0, bls.t1, alpha);
+    b.car.quaternion.slerpQuaternions(bls.q0, bls.q1, alpha);
+    const bt = b.car.position;
     b.vehicle.syncWheels(b.wheels);
     b.car.updateMatrixWorld();
     const bv = b.vehicle.chassis.linvel();
@@ -636,9 +677,15 @@ renderer.setAnimationLoop(() => {
     renderer.resolveTimestampsAsync('render'); // раз в полсекунды, не каждый кадр
     const cpu = cpuAcc / perfN;
     const gpu = renderer.info.render.timestamp || 0;
-    const worst = Math.max(cpu, gpu);
+    const fpsNow = Math.round(perfN / perfTimer);
+    // gpu-таймстампы на Metal (маки) часто врут: 130 мс при плавных 60 fps
+    // невозможны — противоречащий реальному fps замер помечаем и не даём
+    // ему красить потолок
+    const gpuValid = gpu > 0.01 && gpu * fpsNow < 2000;
+    const worst = Math.max(cpu, gpuValid ? gpu : 0);
     perfEl.textContent =
-      `CPU ${cpu.toFixed(1)} мс · GPU ${gpu.toFixed(1)} мс · потолок ~${worst > 0.01 ? Math.round(1000 / worst) : '—'} fps`;
+      `fps ${fpsNow} · CPU ${cpu.toFixed(1)} мс · GPU ${gpuValid ? gpu.toFixed(1) : '?'} мс`
+      + ` · потолок ~${worst > 0.01 ? Math.round(1000 / worst) : '—'} fps`;
     cpuAcc = 0; perfN = 0; perfTimer = 0;
   }
 
