@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>МЕДВЕДЬ</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1a2210; }
+    #hud {
+      position: fixed; left: 16px; bottom: 12px; color: #fff;
+      font: 700 28px/1 system-ui, sans-serif; text-shadow: 0 1px 3px #0008;
+      user-select: none; pointer-events: none;
+    }
+    #hud small { font-weight: 400; font-size: 13px; opacity: .75; display: block; margin-top: 6px; }
+    #perf {
+      position: fixed; right: 14px; bottom: 12px; color: #cfe;
+      font: 12px ui-monospace, monospace; text-shadow: 0 1px 2px #0009;
+      user-select: none; pointer-events: none; text-align: right;
+    }
+    /* сплэш: обложка целиком (contain — не обрезается), тёмная заливка по бокам */
+    #loading {
+      position: fixed; inset: 0; z-index: 100;
+      background: #101508 url('cover.webp') center / contain no-repeat;
+      transition: opacity .4s;
+    }
+    /* строка статуса загрузки в нижней трети */
+    #loadstage {
+      position: absolute; left: 50%; bottom: 18%; transform: translateX(-50%);
+      max-width: 80%; padding: 8px 18px; border-radius: 10px;
+      background: #000a; color: #fff; font: 15px system-ui, sans-serif;
+      text-align: center; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading"><div id="loadstage">лес просыпается…</div></div>
+  <div id="perf"></div>
+  <div id="hud"><span id="speed">0</span> км/ч
+    <small>WASD — ехать · Space — ручник · ЛКМ — камера · C — капот · R — сброс</small>
+  </div>
+  <!-- доступен до загрузки модулей -->
+  <script>window.__loadStage = (t) => { const el = document.getElementById('loadstage'); if (el) el.textContent = t; }</script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

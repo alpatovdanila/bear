@@ -1,0 +1,13 @@
+node_modules/
+dist/
+
+# полная библиотека звуков (120 МБ) — в репо едет только выборка public/sfx
+public/sounds/
+
+# тяжёлые неиспользуемые исходники окружения (игра грузит только sky_linekotsi_07_HDRI.hdr)
+public/sky_linekotsi_23.hdr
+public/sky_linekotsi_23_HDRI.tx
+public/sky_linekotsi_23.png
+public/sky_linekotsi_07.png
+public/immenstadter_horn_1k.exr
+public/cover.png
